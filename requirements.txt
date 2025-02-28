@@ -1,0 +1,18 @@
+# Base requirements
+numpy==1.26.4
+scipy
+pandas
+opencv-python
+pillow
+ultralytics==8.1.1
+loguru
+yacs
+filterpy
+ftfy
+gdown
+gitpython
+lapx
+pyyaml
+regex
+scikit-learn
+transformers

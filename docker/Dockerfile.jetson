@@ -1,0 +1,10 @@
+FROM nvcr.io/nvidia/l4t-ml:r35.3.1-py3
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip && \
+    pip3 install -r requirements.txt && \
+    pip3 install torch torchvision torchaudio --extra-index-url https://developer.download.nvidia.com/compute/redist/jp/v5.1/pytorch/
