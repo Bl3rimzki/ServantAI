@@ -1,196 +1,76 @@
 import cv2
-from ultralytics import YOLO
-import numpy as np
 import threading
+import time
 from typing import Dict, Any, Union
+
 
 class CameraManager:
     def __init__(self):
-        """Initialize the camera manager."""
-        self.cameras = {}  # Dictionary to store camera instances by ID
-        self.detector = YOLO('yolov8n.pt')  # Initialize YOLO detector once for efficiency
-        
-    def add_camera(self, camera_id: str, source: Union[str, int], port: int = None) -> None:
+        self.cameras = {}
+
+    def add_camera(self, camera_id: str, source: Union[str, int], port: int = None,
+                   width: int = None, height: int = None, max_fps: float = 0) -> None:
         """
-        Add a new camera with the given source.
-        
-        Args:
-            camera_id (str): Unique identifier for the camera.
-            source (Union[str, int]): IP address for IP camera or device index for USB camera.
-            port (int, optional): Port number for the IP camera stream. Not used for USB cameras.
+        Kamera hinzufügen mit optionaler Auflösung und FPS-Limit.
         """
         if isinstance(source, str) and port is not None:
-            # Construct the video URL for IP camera
             video_url = f"http://{source}:{port}/video"
         else:
-            # Use the source directly for USB camera (device index)
             video_url = source
-        
+
+        stream = cv2.VideoCapture(video_url)
+
+        # Falls gewünscht: Auflösung setzen
+        if width and height:
+            stream.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            stream.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+        # Auflösung zur Sicherheit nach dem Setzen auslesen (nicht jede Kamera unterstützt jede Auflösung)
+        actual_width = int(stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"Kamera {camera_id} läuft mit {actual_width}x{actual_height}")
+
         self.cameras[camera_id] = {
-            "stream": cv2.VideoCapture(video_url),
+            "stream": stream,
             "running": False,
             "thread": None,
-            "frame": None
+            "frame": None,
+            "max_fps": max_fps,
+            "last_frame_time": 0
         }
-        
+
     def start_camera_stream(self, camera_id: str) -> None:
-        """
-        Start the video stream for the specified camera.
-        
-        Args:
-            camera_id (str): Unique identifier for the camera.
-        """
         if camera_id in self.cameras:
             camera = self.cameras[camera_id]
             if not camera["running"]:
                 camera["running"] = True
-                # Start a thread to capture frames continuously
                 camera["thread"] = threading.Thread(target=self._capture_frames, args=(camera,))
                 camera["thread"].start()
-        
+
     def _capture_frames(self, camera: Dict[str, Any]) -> None:
-        """
-        Continuously capture frames from the camera stream.
-        
-        Args:
-            camera (Dict): Dictionary containing camera state and stream information.
-        """
         while camera["running"]:
+            now = time.time()
+            time_since_last_frame = now - camera["last_frame_time"]
+
+            if camera["max_fps"] > 0 and time_since_last_frame < (1.0 / camera["max_fps"]):
+                time.sleep((1.0 / camera["max_fps"]) - time_since_last_frame)
+                continue
+
             ret, frame = camera["stream"].read()
             if not ret:
                 continue
-            # Store the frame for processing
+
             camera["frame"] = frame
-        
+            camera["last_frame_time"] = time.time()
+
     def stop_camera_stream(self, camera_id: str) -> None:
-        """
-        Stop the video stream for the specified camera.
-        
-        Args:
-            camera_id (str): Unique identifier for the camera.
-        """
         if camera_id in self.cameras:
             camera = self.cameras[camera_id]
-            if camera["running"]:
-                camera["running"] = False
-                if camera["thread"] is not None:
-                    camera["thread"].join()
-        
-    def process_camera_feed(self, camera_id: str):
-            if camera_id not in self.cameras or self.cameras[camera_id]["frame"] is None:
-                return {}
+            camera["running"] = False
+            if camera["thread"] is not None:
+                camera["thread"].join()
 
-            frame = self.cameras[camera_id]["frame"]
-            # Perform object detection
-            results = self.detector(frame)
-
-            detections = []
-            for box in results[0].boxes:
-                class_id = int(box.cls.cpu().numpy()[0])
-                confidence = float(box.conf.cpu().numpy()[0])
-                x1, y1, x2, y2 = map(int, box.xyxy.cpu().numpy()[0])
-
-                detections.append({
-                    "class": class_id,
-                    "confidence": confidence,
-                    "bbox": (x1, y1, x2, y2)
-                })
-
-            return {"frame": frame, "detections": detections}
-    
-    def get_frame(self, camera_id):
+    def get_frame(self, camera_id: str):
         if camera_id in self.cameras:
             return self.cameras[camera_id]["frame"]
         return None
-    
-    
-    def merge_camera_feeds(self) -> np.ndarray:
-        """
-        Merge video feeds from all cameras into a single display window.
-        
-        Returns:
-            np.ndarray: Merged video feed as a numpy array.
-        """
-        merged_frames = []
-        
-        # Get the current frames from all cameras
-        for camera_id, camera in self.cameras.items():
-            if camera["frame"] is not None:
-                frame = camera["frame"].copy()
-                
-                # Draw detections on the frame
-                processed_frame = self._draw_detections(frame, camera_id)
-                
-                # Add a label showing the camera ID
-                cv2.putText(processed_frame, f"Camera {camera_id}", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                
-                merged_frames.append(processed_frame)
-        
-        # If no cameras are active, return an empty frame
-        if not merged_frames:
-            return np.zeros((480, 640, 3), dtype=np.uint8)
-        
-        # Arrange the frames in a grid (e.g., side by side horizontally)
-        merged_feed = cv2.hconcat(merged_frames)
-        
-        return merged_feed
-    
-    def _draw_detections(self, frame: np.ndarray, camera_id: str) -> np.ndarray:
-        """
-        Draw detection results on the specified frame.
-        
-        Args:
-            frame (np.ndarray): Input frame to draw detections on.
-            camera_id (str): Unique identifier for the camera.
-            
-        Returns:
-            np.ndarray: Frame with detections drawn.
-        """
-        if camera_id not in self.cameras or self.cameras[camera_id]["frame"] is None:
-            return frame
-        
-        processed_frame = self.process_camera_feed(camera_id)
-        
-        # Draw bounding boxes and labels on the frame
-        for detection in processed_frame["detections"]:
-            x1, y1, x2, y2 = detection["bbox"]
-            confidence = detection["confidence"]
-            
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, f"Class {detection['class']}: {confidence:.2f}",
-                       (x1, y1 - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        return frame
-        
-def main():
-    # Initialize the camera manager
-    camera_manager = CameraManager()
-    
-    # Add multiple cameras
-    camera_manager.add_camera("camera_1", "192.168.1.12", 4747)
-    
-    # Start all camera streams
-    for camera_id in camera_manager.cameras:
-        camera_manager.start_camera_stream(camera_id)
-    
-    try:
-        while True:
-            # Merge all camera feeds and display them
-            merged_feed = camera_manager.merge_camera_feeds()
-            
-            # Display the merged feed
-            cv2.imshow("Multi-Camera Feed", merged_feed)
-            
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-    finally:
-        # Clean up resources
-        for camera_id in camera_manager.cameras:
-            camera_manager.stop_camera_stream(camera_id)
-        
-        cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()

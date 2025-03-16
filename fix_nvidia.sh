@@ -1,66 +1,45 @@
-#!/bin/bash
-set -e
 
-echo "🚀 NVIDIA GPU Environment Fixer - Workstation Edition (v3)"
+# 8️⃣ Python 3.10 mit pyenv
+sudo apt-get install -y \
+    make build-essential libssl-dev zlib1g-dev \
+    libbz2-dev libreadline-dev libsqlite3-dev curl \
+    llvm libncursesw5-dev xz-utils tk-dev libxml2-dev \
+    libxmlsec1-dev libffi-dev liblzma-dev python3-venv
 
-# 1️⃣ Systeminfo
-echo "🔎 Systeminfo:"
-lsb_release -a || cat /etc/os-release
-uname -r
-echo ""
+curl https://pyenv.run | bash
+echo 'export PATH="$HOME/.pyenv/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(pyenv init --path)"' >> ~/.bashrc
+echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+echo 'eval "$(pyenv virtualenv-init -)"' >> ~/.bashrc
+. ~/.bashrc
 
-# 2️⃣ Cleanup
-echo "🧹 Alte NVIDIA Pakete entfernen..."
-sudo rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get purge -y '^nvidia-.*' '^libnvidia-.*' 'cuda-.*' 'nvidia-container.*' || true
-sudo apt-get autoremove -y
-sudo apt-get autoclean -y
+pyenv install 3.10.14
+pyenv virtualenv 3.10.14 servantai-env
+pyenv activate servantai-env
 
-# 3️⃣ NVIDIA Treiber installieren
-echo "💾 NVIDIA Treiber (550) installieren..."
-sudo add-apt-repository -y ppa:graphics-drivers/ppa
-sudo apt-get update
-sudo apt-get install -y nvidia-driver-550
 
-# 4️⃣ NVIDIA Container Toolkit direkt aus GitHub (aktuellste Version)
-echo "💾 NVIDIA Container Toolkit direkt aus GitHub beziehen..."
-mkdir -p /tmp/nvidia-container-toolkit
-cd /tmp/nvidia-container-toolkit
+# 🔟 Requirements installieren
+pip install -r requirements.txt
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Automatisch die aktuellen URLs auslesen
-BASE_URL="https://nvidia.github.io/libnvidia-container/stable/deb/amd64/"
-for PACKAGE in libnvidia-container1 libnvidia-container-tools nvidia-container-toolkit; do
-    PACKAGE_URL=$(curl -s $BASE_URL | grep -oE "$PACKAGE.*\.deb" | head -n 1)
-    if [ -z "$PACKAGE_URL" ]; then
-        echo "❌ Fehler: Konnte $PACKAGE nicht finden!"
-        exit 1
-    fi
-    wget "$BASE_URL$PACKAGE_URL"
-done
+# 1️⃣1️⃣ FastSAM & BoxMOT holen
+if [ ! -d "FastSAM" ]; then
+    git clone https://github.com/CASIA-IVA-Lab/FastSAM.git
+    cd FastSAM
+    pip install -e .
+fi
 
-# Installieren
-sudo dpkg -i *.deb
+cd ~/Git/ServantAI
+if [ ! -d "BoxMOT" ]; then
+    git clone https://github.com/bochinski/BoxMOT.git
+    cd BoxMOT
+    pip install -e .
+fi
 
-# 5️⃣ Docker Runtime sicherstellen
-echo "⚙️ Docker Runtime konfigurieren..."
-sudo tee /etc/docker/daemon.json > /dev/null <<EOF
-{
-    "runtimes": {
-        "nvidia": {
-            "path": "nvidia-container-runtime",
-            "runtimeArgs": []
-        }
-    }
-}
-EOF
-sudo systemctl restart docker
+# 1️⃣2️⃣ ServantAI Testlauf
+cd ~/Git/ServantAI
+echo "🚀 Starte ServantAI Testlauf:"
+python3 main.py
 
-# 6️⃣ Reboot-Hinweis
-echo "🔄 Reboot dringend empfohlen!"
-echo ""
+echo "✅ Full Setup abgeschlossen!"
 
-# 7️⃣ Testlauf
-echo "🧪 Test: Docker GPU Zugriff"
-docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
-
-echo "✅ Fix abgeschlossen!"
