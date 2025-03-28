@@ -1,7 +1,11 @@
 from ultralytics import YOLO
+import threading
+
+# Create a global lock for CUDA operations
+cuda_lock = threading.Lock()
 
 class YoloDetector:
-    def __init__(self, model_path="yolov8n.pt", allowed_classes=None):
+    def __init__(self, model_path="models/yolo11x.pt", allowed_classes=None):
         """
         YOLOv8 Detector
         Args:
@@ -11,22 +15,31 @@ class YoloDetector:
         self.model = YOLO(model_path)
         self.allowed_classes = allowed_classes if allowed_classes else []
 
+    # In your YoloDetector class
     def detect(self, frame):
-        results = self.model(frame)
-
-        detections = []
-        for box in results[0].boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
-            cls = int(box.cls[0])
-
-            if self.allowed_classes and cls not in self.allowed_classes:
-                continue
-
-            detections.append({
-                "class": cls,
-                "confidence": conf,
-                "bbox": (x1, y1, x2, y2)
-            })
-
-        return detections
+        """Run detection on a frame with CUDA lock"""
+        if frame is None:
+            return []
+        
+        # Use the global CUDA lock when performing GPU operations
+        with cuda_lock:
+            results = self.model.predict(frame, conf=0.25)
+            
+            # Convert results to our standard format
+            detections = []
+            
+            for r in results:
+                boxes = r.boxes
+                for i in range(len(boxes)):
+                    x1, y1, x2, y2 = boxes.xyxy[i].tolist()
+                    confidence = boxes.conf[i].item()
+                    class_id = int(boxes.cls[i].item())
+                    
+                    detection = {
+                        "bbox": [x1, y1, x2, y2],
+                        "confidence": confidence,
+                        "class": class_id
+                    }
+                    detections.append(detection)
+            
+            return detections
